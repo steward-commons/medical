@@ -10,7 +10,9 @@ chart note) in this folder.
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -70,7 +72,7 @@ def _parse_ts(value: str) -> datetime | None:
 
 def suggest_defense(house: Path, *, integrity_report: dict[str, Any] | None = None) -> Suggestion:
     """Integrity mismatch is red. Empty injection logs are not an emergency."""
-    report = integrity_report if integrity_report is not None else _live_integrity()
+    report = integrity_report if integrity_report is not None else _live_integrity(house)
     if report.get("error"):
         return Suggestion(
             "defense",
@@ -107,22 +109,138 @@ def suggest_defense(house: Path, *, integrity_report: dict[str, Any] | None = No
     )
 
 
-def _live_integrity() -> dict[str, Any]:
-    """Read-only compare against the live manifest. Never saves or accepts."""
-    defense_dir = paths.house_root() / "defense"
-    if str(defense_dir) not in sys.path:
-        sys.path.insert(0, str(defense_dir))
+def _integrity_py_candidates(house: Path) -> list[Path]:
+    """Possible locations of integrity.py: env, house layouts, or a sibling folder."""
+    candidates: list[Path] = []
+    raw = os.environ.get("MEDICAL_INTEGRITY", "").strip()
+    if raw:
+        path = Path(raw)
+        candidates.append(path if path.name == "integrity.py" else path / "integrity.py")
+    house = house.resolve()
+    candidates.append(house / "defense" / "integrity.py")
+    candidates.append(house / "house-defense" / "integrity.py")
+    sibling_root = paths.CODE_ROOT.parent
+    candidates.append(sibling_root / "house-defense" / "integrity.py")
+    candidates.append(sibling_root / "defense" / "integrity.py")
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        out.append(path)
+    return out
+
+
+def _override_integrity_py() -> Path | None:
+    raw = os.environ.get("MEDICAL_INTEGRITY", "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    return path if path.name == "integrity.py" else path / "integrity.py"
+
+
+def _load_integrity_module(integrity_py: Path):
+    """Load integrity.py from an explicit path. Returns (module, error)."""
+    name = "_medical_vitals_integrity"
+    if name in sys.modules:
+        del sys.modules[name]
     try:
-        import integrity as integrity_mod
-    except Exception as exc:  # pragma: no cover - import environment
-        return {"error": f"Could not import integrity.py: {exc}"}
-    manifest_path = integrity_mod.MANIFEST_PATH
-    if not manifest_path.is_file():
+        spec = importlib.util.spec_from_file_location(name, integrity_py)
+        if spec is None or spec.loader is None:
+            return None, f"Could not load {integrity_py}"
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except Exception as exc:
+        return None, exc
+    return mod, None
+
+
+def _resolve_manifest_path(integrity_mod, integrity_py: Path, house: Path) -> Path | None:
+    """Accept either manifest_path() or a MANIFEST_PATH constant."""
+    path = None
+    fn = getattr(integrity_mod, "manifest_path", None)
+    if callable(fn):
+        try:
+            raw = fn()
+        except Exception:
+            raw = None
+        if raw:
+            path = Path(raw)
+    if path is None:
+        const = getattr(integrity_mod, "MANIFEST_PATH", None)
+        if const:
+            path = Path(const)
+    if path is not None and path.is_file():
+        return path
+    for candidate in (
+        integrity_py.parent / "integrity-manifest.json",
+        house / "defense" / "integrity-manifest.json",
+        house / "house-defense" / "integrity-manifest.json",
+        house / "integrity-manifest.json",
+    ):
+        if candidate.is_file():
+            return candidate
+    return path
+
+
+def _live_integrity(house: Path | None = None) -> dict[str, Any]:
+    """Read-only compare against the live manifest. Never saves or accepts.
+
+    Finds either public layout (house-defense/integrity.py with
+    manifest_path()) or defense/integrity.py with a MANIFEST_PATH
+    constant. Override the directory (or the file path) with
+    MEDICAL_INTEGRITY.
+    """
+    root = (house or paths.house_root()).resolve()
+    override = _override_integrity_py()
+    found_py = None
+    integrity_mod = None
+    last_error = None
+    for candidate in _integrity_py_candidates(root):
+        if not candidate.is_file():
+            continue
+        mod, err = _load_integrity_module(candidate)
+        if mod is None:
+            last_error = err
+            if override is not None and candidate.resolve() == override.resolve():
+                return {"error": f"Could not import integrity.py: {err}"}
+            continue
+        found_py = candidate
+        integrity_mod = mod
+        break
+    if integrity_mod is None or found_py is None:
+        if last_error is not None:
+            return {"error": f"Could not import integrity.py: {last_error}"}
+        return {"error": "No integrity.py found under defense/ or house-defense/."}
+
+    manifest_path = _resolve_manifest_path(integrity_mod, found_py, root)
+    if manifest_path is None or not manifest_path.is_file():
         return {"error": "No integrity manifest found."}
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         expected = manifest.get("files", {})
-        current = integrity_mod.scan()
+        old_root = os.environ.get("INTEGRITY_ROOT")
+        pushed_root = False
+        manifest_root = str(manifest.get("root") or "").strip()
+        if manifest_root and not (old_root or "").strip() and Path(manifest_root).is_dir():
+            os.environ["INTEGRITY_ROOT"] = str(Path(manifest_root).resolve())
+            pushed_root = True
+            reload = getattr(integrity_mod, "reload_config", None)
+            if callable(reload):
+                reload()
+        try:
+            current = integrity_mod.scan()
+        finally:
+            if pushed_root:
+                if old_root is None:
+                    os.environ.pop("INTEGRITY_ROOT", None)
+                else:
+                    os.environ["INTEGRITY_ROOT"] = old_root
     except Exception as exc:
         return {"error": f"Integrity scan failed to read: {exc}"}
     added = sorted(set(current) - set(expected))

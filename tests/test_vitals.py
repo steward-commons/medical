@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -140,6 +142,83 @@ class TestVitals(unittest.TestCase):
                 self.assertNotEqual(board["parts"]["range"]["tag"], "black")
                 self.assertFalse((iso.house / "FREEZE").exists())
                 self.assertTrue((iso.data / "logs" / "incident.jsonl").is_file())
+
+    def _install_integrity(self, house: Path, *, folder: str, style: str, dest: Path | None = None) -> Path:
+        """Write a tiny read-only integrity stub and a matching healthy manifest."""
+        dest = dest if dest is not None else (house / folder)
+        dest.mkdir(parents=True, exist_ok=True)
+        if style == "function":
+            source = (
+                "from pathlib import Path\n"
+                "import json, os\n"
+                "\n"
+                "def manifest_path():\n"
+                "    raw = os.environ.get('INTEGRITY_MANIFEST', '').strip()\n"
+                "    if raw:\n"
+                "        return Path(raw)\n"
+                "    return Path(__file__).resolve().parent / 'integrity-manifest.json'\n"
+                "\n"
+                "def scan():\n"
+                "    manifest = json.loads(manifest_path().read_text(encoding='utf-8'))\n"
+                "    return dict(manifest.get('files', {}))\n"
+            )
+        elif style == "constant":
+            source = (
+                "from pathlib import Path\n"
+                "import json\n"
+                "\n"
+                "MANIFEST_PATH = Path(__file__).resolve().parent / 'integrity-manifest.json'\n"
+                "\n"
+                "def scan():\n"
+                "    manifest = json.loads(MANIFEST_PATH.read_text(encoding='utf-8'))\n"
+                "    return dict(manifest.get('files', {}))\n"
+            )
+        else:
+            raise ValueError(style)
+        (dest / "integrity.py").write_text(source, encoding="utf-8")
+        manifest = {
+            "root": str(house),
+            "files": {"README.md": {"type": "file", "sha256": "abc", "size": 5}},
+        }
+        (dest / "integrity-manifest.json").write_text(
+            json.dumps(manifest) + "\n", encoding="utf-8"
+        )
+        return dest
+
+    def test_live_integrity_house_defense_layout_is_green(self):
+        with tempfile.TemporaryDirectory() as raw:
+            with Isolate(Path(raw)) as iso:
+                self._install_integrity(iso.house, folder="house-defense", style="function")
+                suggestion = vitals.suggest_defense(iso.house)
+                self.assertEqual(suggestion.tag, "green", suggestion.reason)
+                self.assertIn("Integrity check clean", suggestion.reason)
+
+    def test_live_integrity_defense_layout_with_constant_is_green(self):
+        with tempfile.TemporaryDirectory() as raw:
+            with Isolate(Path(raw)) as iso:
+                self._install_integrity(iso.house, folder="defense", style="constant")
+                suggestion = vitals.suggest_defense(iso.house)
+                self.assertEqual(suggestion.tag, "green", suggestion.reason)
+                self.assertIn("Integrity check clean", suggestion.reason)
+
+    def test_live_integrity_via_medical_integrity_env(self):
+        with tempfile.TemporaryDirectory() as raw:
+            with Isolate(Path(raw)) as iso:
+                custom = Path(raw) / "custom-kit"
+                self._install_integrity(iso.house, folder="custom-kit", style="function", dest=custom)
+                old = os.environ.get("MEDICAL_INTEGRITY")
+                os.environ["MEDICAL_INTEGRITY"] = str(custom)
+                try:
+                    suggestion = vitals.suggest_defense(iso.house)
+                finally:
+                    if old is None:
+                        os.environ.pop("MEDICAL_INTEGRITY", None)
+                    else:
+                        os.environ["MEDICAL_INTEGRITY"] = old
+                self.assertEqual(suggestion.tag, "green", suggestion.reason)
+                self.assertIn("Integrity check clean", suggestion.reason)
+
+
 
 
 if __name__ == "__main__":

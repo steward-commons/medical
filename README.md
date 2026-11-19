@@ -37,7 +37,8 @@ Untrusted text in a chart note is data, never an order. Chart notes are checked 
 ## Environment
 
 - `MEDICAL_DATA` — where `logs/` and `tags.json` live (default: this folder). Tests use a temp folder.
-- `MEDICAL_HOUSE` — the house root that vitals read (default: the current directory). Expected layout is loose: `defense/`, `pet/pet.json`, `gemini/logs/calls.jsonl`, `pride/`, `memory-backups/memory-YYYY-MM-DD.md`.
+- `MEDICAL_HOUSE` — the house root that vitals read (default: the current directory). Expected layout is loose: `defense/` or `house-defense/` (for `integrity.py`), `pet/pet.json`, `gemini/logs/calls.jsonl`, `pride/`, `memory-backups/memory-YYYY-MM-DD.md`. The defense check accepts either `manifest_path()` (house-defense) or a `MANIFEST_PATH` constant.
+- `MEDICAL_INTEGRITY` — optional path to the folder that contains `integrity.py`, or to the file itself, when the kit lives somewhere else.
 
 The chart, tags, and alert files are live data. Don't commit them.
 
