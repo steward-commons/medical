@@ -6,9 +6,11 @@ own `paths` modules are not shadowed. This file uses only the stdlib.
 A missing or unreadable flag means the house is not frozen.
 
 The morphine pen freezes ordinary writes and runs for every hooked part.
-A tourniquet freezes only the named part. The medical chart, status, and
-`medic.py pen --off` stay available either way. This module never sends
-mail, never pauses a server-side routine, and never walks into private/.
+A tourniquet freezes only the named part. Emergency coma is a deeper
+freeze of the same flag. The medical chart, status, flare notice, and
+wake path (`medic.py coma --off` or `wake.py`) stay available either way.
+This module never sends mail, never pauses a server-side routine, and
+never walks into private/.
 """
 
 from __future__ import annotations
@@ -51,6 +53,15 @@ def alert_path() -> Path:
     return flags_dir() / "routine-pause-request.txt"
 
 
+def flare_path() -> Path:
+    return flags_dir() / "flare-notice.txt"
+
+
+def flare_email_outbox_path() -> Path:
+    """Queued opt-in flare email. A later turn sends it; this kit does not."""
+    return flags_dir() / "flare-email-outbox.json"
+
+
 def empty_state() -> dict[str, Any]:
     return {
         "pen": {
@@ -59,6 +70,15 @@ def empty_state() -> dict[str, Any]:
             "set_by": None,
             "reason": None,
             "alert_queued": False,
+        },
+        "coma": {
+            "on": False,
+            "set_at": None,
+            "set_by": None,
+            "reason": None,
+            "flare_queued": False,
+            "flare_email_queued": False,
+            "last_resort": False,
         },
         "tourniquets": {},
     }
@@ -78,6 +98,9 @@ def load_state() -> dict[str, Any]:
     pen = data.get("pen") if isinstance(data.get("pen"), dict) else {}
     base["pen"].update({k: pen.get(k, base["pen"][k]) for k in base["pen"]})
     base["pen"]["on"] = bool(base["pen"].get("on"))
+    coma = data.get("coma") if isinstance(data.get("coma"), dict) else {}
+    base["coma"].update({k: coma.get(k, base["coma"][k]) for k in base["coma"]})
+    base["coma"]["on"] = bool(base["coma"].get("on"))
     incoming = data.get("tourniquets") if isinstance(data.get("tourniquets"), dict) else {}
     cuffs: dict[str, Any] = {}
     for name, rec in incoming.items():
@@ -91,6 +114,10 @@ def pen_is_on() -> bool:
     return bool(load_state()["pen"].get("on"))
 
 
+def coma_is_on() -> bool:
+    return bool(load_state()["coma"].get("on"))
+
+
 def isolated_parts() -> tuple[str, ...]:
     return tuple(sorted(load_state()["tourniquets"]))
 
@@ -101,6 +128,16 @@ def blocked(part: str) -> str | None:
     if name == "medical":
         return None
     state = load_state()
+    if state["coma"].get("on"):
+        reason = state["coma"].get("reason") or "no reason recorded"
+        return (
+            f"Emergency coma is on ({reason}). "
+            f"Ordinary writes and runs for {name or 'this part'} are frozen. "
+            "The chart, status, flare notice, and wake path stay available. "
+            "Wake with: medic.py coma --off --i-have-owner-ok "
+            "(or wake.py --i-have-owner-ok). "
+            "Server-side routines were not paused."
+        )
     if state["pen"].get("on"):
         reason = state["pen"].get("reason") or "no reason recorded"
         return (

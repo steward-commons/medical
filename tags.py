@@ -177,7 +177,7 @@ def format_board(board: dict[str, Any] | None = None) -> str:
     updated = data.get("updated") or "never"
     lines = [
         f"Triage tags as of {paths.now_human()}. Board updated: {updated}.",
-        "Tags are visibility. The pen and tourniquet are separate commands. No mail, no coma, no restore.",
+        "Tags are visibility. The pen, tourniquet, and coma are separate commands. No mail, no restore.",
         "",
         f"{'Part':<10} {'Tag':<8} Reason",
     ]

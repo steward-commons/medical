@@ -87,7 +87,7 @@ def format_status(state: dict[str, Any] | None = None) -> str:
     else:
         lines.append("Tourniquets: none.")
     lines.append(
-        "No mail, no coma, no restore. Server-side routines are only paused in the main chat."
+        "No mail, no restore. Server-side routines are only paused in the main chat."
     )
     return "\n".join(lines)
 
