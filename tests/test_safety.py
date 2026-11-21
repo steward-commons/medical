@@ -42,6 +42,7 @@ class TestSafety(unittest.TestCase):
                 self.assertFalse(list(iso.house.rglob("*")))
                 import guard
                 self.assertFalse(guard.pen_is_on())
+                self.assertFalse(guard.coma_is_on())
                 self.assertEqual(guard.isolated_parts(), ())
 
     def test_refuses_to_treat_private_as_a_house_path(self):
