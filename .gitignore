@@ -3,3 +3,8 @@ __pycache__/
 logs/
 tags.json
 alerts/
+flags/
+
+# Working copies — never publish or upload
+*.bak*
+*.bak-*
